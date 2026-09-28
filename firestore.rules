@@ -1,0 +1,193 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ----------------------------------------------------------------------
+    // Shared authorization helpers
+    // ----------------------------------------------------------------------
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function membershipPath(companyId, userId) {
+      return /databases/$(database)/documents/companies/$(companyId)/memberships/$(userId);
+    }
+
+    function hasMembership(companyId, userId) {
+      return signedIn()
+        && exists(membershipPath(companyId, userId))
+        && get(membershipPath(companyId, userId)).data.status == 'active';
+    }
+
+    function isMember(companyId) {
+      return hasMembership(companyId, request.auth.uid);
+    }
+
+    function isAdmin(companyId) {
+      return isMember(companyId)
+        && get(membershipPath(companyId, request.auth.uid)).data.role == 'admin';
+    }
+
+    // Prevents callers from adding arbitrary fields to protected documents.
+    function hasOnly(allowedFields) {
+      return request.resource.data.keys().hasOnly(allowedFields);
+    }
+
+    // ----------------------------------------------------------------------
+    // User profiles
+    // ----------------------------------------------------------------------
+    // Users may access only their own profile. Role and company ownership are
+    // server-controlled and cannot be created or changed by the client.
+    // ----------------------------------------------------------------------
+
+    match /users/{userId} {
+      allow read: if isSelf(userId);
+
+      allow create: if isSelf(userId)
+        && hasOnly([
+          'userId', 'email', 'displayName', 'photoUrl', 'status',
+          'createdAt', 'updatedAt', 'lastLoginAt', 'defaultCompanyId',
+          'createdFromJoinCode'
+        ])
+        && request.resource.data.userId == userId;
+
+      allow update: if isSelf(userId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'email', 'displayName', 'photoUrl', 'lastLoginAt', 'updatedAt'
+        ])
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.companyId == resource.data.companyId;
+
+      allow delete: if false;
+    }
+
+    // ----------------------------------------------------------------------
+    // Companies
+    // ----------------------------------------------------------------------
+    // Active members may read basic company information. Company creation and
+    // administrative metadata changes belong to trusted server operations.
+    // ----------------------------------------------------------------------
+
+    match /companies/{companyId} {
+      allow read: if isMember(companyId);
+      allow create: if false;
+      allow update: if isAdmin(companyId)
+        && request.resource.data.companyId == resource.data.companyId
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false;
+
+      // Membership and role changes are server-controlled. This also prevents
+      // members from elevating themselves to admin.
+      match /memberships/{userId} {
+        allow read: if isSelf(userId) || isAdmin(companyId);
+        allow create, update, delete: if false;
+      }
+    }
+
+    // ----------------------------------------------------------------------
+    // Join codes
+    // ----------------------------------------------------------------------
+    // Join-code documents contain sensitive authorization material. Clients
+    // cannot read, list, create, update, delete, or consume them. The signup
+    // client may call a controlled backend operation, and that operation uses
+    // the Admin SDK, which bypasses Firestore client rules.
+    // ----------------------------------------------------------------------
+
+    match /joinCodes/{joinCodeId} {
+      allow read, list: if false;
+      allow create, update, delete: if false;
+    }
+
+    // ----------------------------------------------------------------------
+    // Inventory
+    // ----------------------------------------------------------------------
+    // Only active members of the document's company may read or write it.
+    // Company ownership and audit identity cannot be changed by the client.
+    // ----------------------------------------------------------------------
+
+    match /inventoryItems/{itemId} {
+      allow read: if signedIn()
+        && resource.data.companyId is string
+        && isMember(resource.data.companyId);
+
+      allow create: if signedIn()
+        && request.resource.data.companyId is string
+        && isMember(request.resource.data.companyId)
+        && request.resource.data.lastEditedBy == request.auth.uid
+        && request.resource.data.lastEditedAt == request.time
+        && hasOnly([
+          'companyId', 'importId', 'itemCode', 'name', 'description',
+          'category', 'quantity', 'unit', 'location', 'status',
+          'customFields', 'createdAt', 'createdBy', 'updatedAt', 'updatedBy',
+          'lastEditedAt', 'lastEditedBy', 'version', 'searchTerms'
+        ]);
+
+      allow update: if signedIn()
+        && resource.data.companyId is string
+        && request.resource.data.companyId == resource.data.companyId
+        && isMember(resource.data.companyId)
+        && request.resource.data.lastEditedBy == request.auth.uid
+        && request.resource.data.lastEditedAt == request.time
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if false;
+    }
+
+    // Import metadata is readable by active members, but processing and status
+    // transitions are trusted operations so clients cannot fabricate results.
+    match /inventoryImports/{importId} {
+      allow read: if signedIn()
+        && resource.data.companyId is string
+        && isMember(resource.data.companyId);
+      allow create, update, delete: if false;
+    }
+
+    // ----------------------------------------------------------------------
+    // Audit logs
+    // ----------------------------------------------------------------------
+    // Audit history is administrator-only and append-only. All writes must be
+    // made by trusted server logic so actors cannot forge audit records.
+    // ----------------------------------------------------------------------
+
+    match /auditLogs/{auditLogId} {
+      allow read: if signedIn()
+        && resource.data.companyId is string
+        && isAdmin(resource.data.companyId);
+      allow create, update, delete: if false;
+    }
+
+    // ----------------------------------------------------------------------
+    // Email submissions
+    // ----------------------------------------------------------------------
+    // Submission records are server-controlled because delivery status and
+    // provider identifiers must not be client-forged.
+    // ----------------------------------------------------------------------
+
+    match /submissions/{submissionId} {
+      allow read: if signedIn()
+        && resource.data.companyId is string
+        && (
+          resource.data.requestedBy == request.auth.uid
+          || isAdmin(resource.data.companyId)
+        );
+      allow create, update, delete: if false;
+    }
+
+    // ----------------------------------------------------------------------
+    // Default deny
+    // ----------------------------------------------------------------------
+    // Any collection not explicitly listed above is inaccessible.
+    // ----------------------------------------------------------------------
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,20 @@
+:root {
+  --font-display:
+    "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono,
+    Courier New, monospace;
+  --font-rounded:
+    "SF Pro Rounded", "Hiragino Maru Gothic ProN", Meiryo, "MS PGothic",
+    sans-serif;
+  --font-serif: Georgia, "Times New Roman", serif;
+  --color-ink: #102a43;
+  --color-canvas: #f4f1ea;
+  --color-mint: #dcefe8;
+  --color-teal: #0f766e;
+  --color-coral: #d95d39;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

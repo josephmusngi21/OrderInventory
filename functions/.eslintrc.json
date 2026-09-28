@@ -1,0 +1,10 @@
+{
+  "env": {
+    "es2022": true,
+    "node": true
+  },
+  "rules": {
+    "no-unused-vars": "warn",
+    "no-console": "off"
+  }
+}
